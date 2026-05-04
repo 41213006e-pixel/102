@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PICO Health: NS-Shaft Style</title>
+    <style>
+        :root { --pico-bg: #2f3640; --pico-hero: #4ea5ff; --pico-hp: #ff4757; --pico-coin: #fbc531; }
+        body { font-family: 'Arial Black', sans-serif; background-color: var(--pico-bg); margin: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
+        
+        #start-screen {
+            position: absolute; width: 100%; height: 100%; background: rgba(0,0,0,0.9);
+            color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; text-align: center;
+        }
+        #start-btn { padding: 20px 60px; font-size: 28px; background: var(--pico-hero); color: white; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; }
+        
+        #ui-top { display: flex; justify-content: space-between; width: 95%; max-width: 600px; padding: 10px; font-weight: bold; color: white; }
+        #question-box { background: white; color: #333; padding: 12px; border-radius: 8px; width: 95%; max-width: 600px; text-align: center; margin-bottom: 5px; font-size: 16px; }
+        canvas { background-color: #f5f6fa; border: 5px solid #718093; width: 95%; max-width: 600px; height: auto; }
+        
+        #mobile-controls { display: none; width: 95%; max-width: 600px; justify-content: space-between; margin-top: 15px; }
+        .control-btn { width: 70px; height: 70px; background: rgba(255,255,255,0.2); border: 2px solid white; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 30px; user-select: none; }
+        @media (max-width: 850px) { #mobile-controls { display: flex; } }
+    </style>
+</head>
+<body>
+
+<div id="start-screen">
+    <h2>🧒 小朋友下樓梯：衛教版</h2>
+    <p style="margin: 20px;">1. 不斷向下跳，別被天花板刺到！<br>2. 踩在平台上，尋找正確金幣 🪙<br>3. 跌入深淵或血量歸零則失敗。</p>
+    <button id="start-btn">開始下樓梯</button>
+</div>
+
+<div id="ui-top">
+    <div id="status-hp">HP: ❤️❤️❤️</div>
+    <div id="status-score">SCORE: 0</div>
+</div>
+<div id="question-box">載入題目中...</div>
+<canvas id="game-canvas" width="400" height="600"></canvas>
+
+<div id="mobile-controls">
+    <div style="display:flex; gap:20px;"><div class="control-btn" id="l">⬅️</div><div class="control-btn" id="r">➡️</div></div>
+    <div class="control-btn" id="j">⬆️</div>
+</div>
+
+<script>
+    const canvas = document.getElementById('game-canvas'), ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('start-btn'), startScreen = document.getElementById('start-screen');
+
+    const quizBank = [
+        { q: "成人每日建議飲水量是體重(kg)乘以多少？", options: ["10ml", "20ml", "30-35ml", "100ml"], correct: 2 },
+        { q: "洗手步驟最後動作是？", options: ["洗指甲", "洗手指", "洗手心", "洗手腕"], correct: 3 },
+        { q: "用眼30分鐘應休息多久？", options: ["1分鐘", "10分鐘", "30分鐘", "不必"], correct: 1 }
+    ];
+
+    let cur = 0, score = 0, hp = 3, gameStarted = false, scrollSpeed = 1.2;
+    let platforms = [], coins = [];
+    const player = { x: 200, y: 100, vx: 0, vy: 0, size: 25, ground: false };
+    const keys = {};
+
+    function createPlatform(y) {
+        return { x: Math.random() * 250, y: y, w: 100 + Math.random() * 50, h: 10 };
+    }
+
+    function init() {
+        platforms = []; coins = [];
+        for (let i = 0; i < 6; i++) platforms.push(createPlatform(i * 120 + 200));
+        player.x = 200; player.y = 100; player.vy = 0;
+        updateUI();
+    }
+
+    function updateUI() {
+        document.getElementById('question-box').innerText = quizBank[cur].q;
+        document.getElementById('status-hp').innerText = "HP: " + "❤️".repeat(hp);
+        document.getElementById('status-score').innerText = "SCORE: " + score;
+    }
+
+    startBtn.addEventListener('click', () => {
+        startScreen.style.display = 'none';
+        gameStarted = true;
+        init();
+        loop();
+    });
+
+    const handleInput = (id, k, val) => {
+        document.getElementById(id).addEventListener('touchstart', e => { e.preventDefault(); keys[k] = val; });
+        document.getElementById(id).addEventListener('touchend', e => { e.preventDefault(); keys[k] = false; });
+    };
+    handleInput('l', 'ArrowLeft', true); handleInput('r', 'ArrowRight', true); handleInput('j', 'ArrowUp', true);
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function update() {
+        // 角色移動
+        player.vx = keys['ArrowLeft'] ? -4.5 : (keys['ArrowRight'] ? 4.5 : player.vx * 0.8);
+        if (keys['ArrowUp'] && player.ground) { player.vy = -10; player.ground = false; }
+        player.vy += 0.5; player.x += player.vx; player.y += player.vy; player.ground = false;
+
+        // 樓梯捲動與碰撞
+        platforms.forEach((p, index) => {
+            p.y -= scrollSpeed; // 樓梯向上捲動
+            
+            // 角色踩在樓梯上
+            if (player.x + player.size > p.x && player.x < p.x + p.w &&
+                player.y + player.size > p.y && player.y + player.size < p.y + 15 && player.vy >= 0) {
+                player.y = p.y - player.size; player.vy = 0; player.ground = true;
+            }
+
+            // 隨機產生金幣在樓梯上
+            if (!p.hasCoin && Math.random() < 0.01 && coins.length < 3) {
+                p.hasCoin = true;
+                coins.push({ x: p.x + 20, y: p.y - 35, text: quizBank[cur].options[Math.floor(Math.random()*4)], pRef: p });
+            }
+        });
+
+        // 移除超出畫面的樓梯，並在底部新增
+        if (platforms[0].y < -20) {
+            platforms.shift();
+            platforms.push(createPlatform(620));
+            score += 10; // 下一層樓加分
+        }
+
+        // 金幣碰撞偵測
+        coins.forEach((c, i) => {
+            c.y = c.pRef.y - 35; // 金幣跟隨樓梯移動
+            if (Math.abs(player.x - c.x) < 30 && Math.abs(player.y - c.y) < 35) {
+                const isCorrect = (c.text === quizBank[cur].options[quizBank[cur].correct]);
+                if (isCorrect) {
+                    score += 100; cur = (cur + 1) % quizBank.length;
+                    alert("正確答案！下一題");
+                } else { hp--; score = Math.max(0, score - 50); }
+                coins.splice(i, 1);
+                updateUI();
+            }
+            if (c.y < -50) coins.splice(i, 1);
+        });
+
+        // 失敗判定
+        if (player.y < 10) { hp--; player.y = 100; player.vy = 5; if(hp<=0) gameOver(); } // 碰到天花板針刺
+        if (player.y > 600) gameOver(); // 掉出畫面
+        if (player.x < 0) player.x = 0; if (player.x > 375) player.x = 375;
+    }
+
+    function gameOver() { alert("遊戲結束！總分：" + score); location.reload(); }
+
+    function draw() {
+        ctx.clearRect(0, 0, 400, 600);
+        
+        // 畫天花板針刺
+        ctx.fillStyle = "#eb4d4b";
+        for(let i=0; i<400; i+=20) {
+            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i+10, 20); ctx.lineTo(i+20, 0); ctx.fill();
+        }
+
+        // 畫樓梯
+        ctx.fillStyle = "#718093";
+        platforms.forEach(p => ctx.fillRect(p.x, p.y, p.w, p.h));
+
+        // 畫金幣
+        coins.forEach(c => {
+            ctx.fillStyle = "#f1c40f"; ctx.beginPath(); ctx.arc(c.x+15, c.y+15, 12, 0, 7); ctx.fill();
+            ctx.fillStyle = "#2f3640"; ctx.font = "bold 12px Arial"; ctx.textAlign = "center";
+            ctx.fillText(c.text, c.x + 15, c.y - 5);
+        });
+
+        // 畫玩家
+        ctx.fillStyle = varStyle('--pico-hero');
+        ctx.fillRect(player.x, player.y, player.size, player.size);
+        ctx.strokeStyle = "#333"; ctx.strokeRect(player.x, player.y, player.size, player.size);
+    }
+
+    function varStyle(name) { return getComputedStyle(document.documentElement).getPropertyValue(name); }
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+</script>
+</body>
+</html>
